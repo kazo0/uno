@@ -81,7 +81,11 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 		/// <summary>
 		/// True if the generator is currently creating child subclasses (for templates, etc)
 		/// </summary>
-		private bool _inChildSubclass = false;
+		private bool _isInChildSubclass = false;
+		/// <summary>
+		/// True if the generator is currently creating the inner singleton class associated with a top-level resource dictionary
+		/// </summary>
+		private bool _isInSingletonInstance = false;
 
 		/// <summary>
 		/// The current DefaultBindMode for x:Bind bindings, as set by app code for the current Xaml subtree.
@@ -125,11 +129,32 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 		/// </summary>
 		private readonly bool _shouldAnnotateGeneratedXaml;
 
-		private string ParseContextPropertyAccess => "{0}{1}.GlobalStaticResources.{2}".InvariantCultureFormat(
+		private string ParseContextPropertyAccess =>
+			 (_isTopLevelDictionary, _isInSingletonInstance) switch
+			 {
+				 (true, false) => "{0}{1}.GlobalStaticResources.{2}.Instance.{3}".InvariantCultureFormat(
+					GlobalPrefix,
+					_defaultNamespace,
+					SingletonClassName,
+					XamlCodeGeneration.ParseContextPropertyName
+				),
+				 (true, true) => "this.{0}".InvariantCultureFormat(XamlCodeGeneration.ParseContextPropertyName),
+				 _ => "{0}{1}.GlobalStaticResources.{2}".InvariantCultureFormat(
+					GlobalPrefix,
+					_defaultNamespace,
+					XamlCodeGeneration.ParseContextPropertyName
+				)
+			 };
+		/*
+		_isInSingletonInstance ?
+		"this.{0}".InvariantCultureFormat(XamlCodeGeneration.ParseContextPropertyName)
+		: "{0}{1}.GlobalStaticResources.{2}.Instance.{3}".InvariantCultureFormat(
 				GlobalPrefix,
 				_defaultNamespace,
+			SingletonClassName,
 				XamlCodeGeneration.ParseContextPropertyName
 			);
+		*/
 		/// <summary>
 		/// Name to use for inner singleton containing top-level ResourceDictionary properties
 		/// </summary>
@@ -646,7 +671,7 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 
 		private void BuildChildSubclasses(IIndentedStringBuilder writer, bool isTopLevel = false)
 		{
-			_inChildSubclass = true;
+			_isInChildSubclass = true;
 			TryAnnotateWithGeneratorSource(writer);
 			var disposable = isTopLevel ? writer.BlockInvariant("namespace {0}.__Resources", _defaultNamespace) : null;
 
@@ -775,9 +800,21 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 					AnalyzerSuppressionsGenerator.Generate(writer, _analyzerSuppressions);
 					using (writer.BlockInvariant("public sealed partial class GlobalStaticResources"))
 					{
-						var hasDefaultStyles = false;
+
+						IDisposable WrapSingleton()
+						{
 						writer.AppendLineInvariant("// This non-static inner class is a means of reducing size of AOT compilations by avoiding many accesses to static members from a static callsite, which adds costly class initializer checks each time.");
-						using (writer.BlockInvariant("internal sealed class {0}", SingletonClassName))
+							var block = writer.BlockInvariant("internal sealed class {0}", SingletonClassName);
+							_isInSingletonInstance = true;
+							return new DisposableAction(() =>
+							{
+								block.Dispose();
+								_isInSingletonInstance = false;
+							});
+						}
+
+						var hasDefaultStyles = false;
+						using (WrapSingleton())
 						{
 							// Build singleton
 							writer.AppendLineInvariant("private static {0} _instance;", SingletonClassName);
@@ -794,7 +831,17 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 								}
 							}
 							writer.AppendLine();
-							writer.AppendLineInvariant("private {0}() {{ }}", SingletonClassName);
+							writer.AppendLineInvariant("internal {0} {1} {{get; }}", XamlCodeGeneration.ParseContextPropertyType, XamlCodeGeneration.ParseContextPropertyName);
+							writer.AppendLine();
+							using (writer.BlockInvariant("private {0}()", SingletonClassName))
+							{
+								var outerProperty = "{0}{1}.GlobalStaticResources.{2}".InvariantCultureFormat(
+									GlobalPrefix,
+									_defaultNamespace,
+									XamlCodeGeneration.ParseContextPropertyName
+								);
+								writer.AppendLineInvariant("{0} = {1};", XamlCodeGeneration.ParseContextPropertyName, outerProperty);
+							}
 							writer.AppendLine();
 						BuildResourceDictionaryGlobalProperties(writer, topLevelControl);
 
@@ -3564,7 +3611,7 @@ namespace Uno.UI.SourceGenerators.XamlGenerator
 		{
 			if (_topLevelDictionaryProperties.TryGetValue((_themeDictionaryCurrentlyBuilding, keyStr), out var propertyDetails))
 			{
-				var propertyAccess = _inChildSubclass ?
+				var propertyAccess = _isInChildSubclass ?
 					"global::{0}.GlobalStaticResources.{1}.Instance.{2} /*{3}*/".InvariantCultureFormat(_defaultNamespace, SingletonClassName, propertyDetails.PropertyName, keyStr)
 					: "this.{0} /*{1}*/".InvariantCultureFormat(propertyDetails.PropertyName, keyStr);
 				return (propertyAccess, propertyDetails.PropertyType);
