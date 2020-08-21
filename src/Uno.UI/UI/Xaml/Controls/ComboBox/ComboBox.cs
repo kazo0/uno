@@ -43,9 +43,12 @@ namespace Windows.UI.Xaml.Controls
 		public event EventHandler<object> DropDownClosed;
 		public event EventHandler<object> DropDownOpened;
 
+		private bool _areItemTemplatesForwarded = false;
+
 		private IPopup _popup;
 		private Border _popupBorder;
 		private ContentPresenter _contentPresenter;
+		private TextBlock _placeholderTextBlock;
 		private ContentPresenter _headerContentPresenter;
 
 		/// <summary>
@@ -79,6 +82,7 @@ namespace Windows.UI.Xaml.Controls
 			_popup = this.GetTemplateChild("Popup") as IPopup;
 			_popupBorder = this.GetTemplateChild("PopupBorder") as Border;
 			_contentPresenter = this.GetTemplateChild("ContentPresenter") as ContentPresenter;
+			_placeholderTextBlock = this.GetTemplateChild("PlaceholderTextBlock") as TextBlock;
 
 			if (_popup is PopupBase popup)
 			{
@@ -93,18 +97,7 @@ namespace Windows.UI.Xaml.Controls
 
 			if (_contentPresenter != null)
 			{
-				_contentPresenter.SetBinding(
-					ContentPresenter.ContentTemplateProperty,
-					new Binding(new PropertyPath("ItemTemplate"), null)
-					{
-						RelativeSource = RelativeSource.TemplatedParent
-					});
-				_contentPresenter.SetBinding(
-					ContentPresenter.ContentTemplateSelectorProperty,
-					new Binding(new PropertyPath("ItemTemplateSelector"), null)
-					{
-						RelativeSource = RelativeSource.TemplatedParent
-					});
+				_contentPresenter.SynchronizeContentWithOuterTemplatedParent = false;
 
 				_contentPresenter.DataContextChanged += (snd, evt) =>
 				{
@@ -250,35 +243,58 @@ namespace Windows.UI.Xaml.Controls
 		{
 			if (_contentPresenter != null)
 			{
-				var item = GetSelectionContent();
-
-				var itemView = item as _View;
-
-				if (itemView != null)
+				if (SelectedItem != null)
 				{
-#if __ANDROID__
-					var comboBoxItem = itemView.FindFirstParentOfView<ComboBoxItem>();
-#else
-					var comboBoxItem = itemView.FindFirstParent<ComboBoxItem>();
-#endif
-					if (comboBoxItem != null)
+					var item = GetSelectionContent();
+					if (item is _View itemView)
 					{
-						// Keep track of the former parent, so we can put the item back when the dropdown is shown
-						_selectionParentInDropdown = (itemView.GetVisualTreeParent() as IWeakReferenceProvider)?.WeakReference;
+#if __ANDROID__
+						var comboBoxItem = itemView.FindFirstParentOfView<ComboBoxItem>();
+#else
+						var comboBoxItem = itemView.FindFirstParent<ComboBoxItem>();
+#endif
+						if (comboBoxItem != null)
+						{
+							// Keep track of the former parent, so we can put the item back when the dropdown is shown
+							_selectionParentInDropdown = (itemView.GetVisualTreeParent() as IWeakReferenceProvider)?.WeakReference;
+						}
+
+						if (itemView.GetVisualTreeParent() != _contentPresenter)
+						{
+							// Item may have been put back in list, reattach it to _contentPresenter
+							_contentPresenter.AddChild(itemView);
+						}
+					}
+					else
+					{
+						_selectionParentInDropdown = null;
+					}
+
+					_contentPresenter.Content = item ?? _placeholderTextBlock;
+					if (!_areItemTemplatesForwarded)
+					{
+						SetContentPresenterBinding(ContentPresenter.ContentTemplateProperty, nameof(ItemTemplate));
+						SetContentPresenterBinding(ContentPresenter.ContentTemplateSelectorProperty, nameof(ItemTemplateSelector));
+
+						_areItemTemplatesForwarded = true;
 					}
 				}
 				else
 				{
-					_selectionParentInDropdown = null;
-				}
+					_contentPresenter.Content = _placeholderTextBlock;
+					if (_areItemTemplatesForwarded)
+					{
+						_contentPresenter.ClearValue(ContentPresenter.ContentTemplateProperty);
+						_contentPresenter.ClearValue(ContentPresenter.ContentTemplateSelectorProperty);
 
-				_contentPresenter.Content = item;
-
-				if (itemView != null && itemView.GetVisualTreeParent() != _contentPresenter)
-				{
-					// Item may have been put back in list, reattach it to _contentPresenter
-					_contentPresenter.AddChild(itemView);
+						_areItemTemplatesForwarded = false;
+					}
 				}
+			}
+
+			void SetContentPresenterBinding(DependencyProperty targetProperty, string sourcePropertyPath)
+			{
+				_contentPresenter.SetBinding(targetProperty, new Binding(sourcePropertyPath) { RelativeSource = RelativeSource.TemplatedParent });
 			}
 		}
 

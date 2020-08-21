@@ -54,6 +54,12 @@ namespace Windows.UI.Xaml.Controls
 		}
 
 		/// <summary>
+		/// Indicates if the content should inherit templated parent from the presenter, or its templated parent.
+		/// </summary>
+		/// <remarks>Clear this flag to let the control nested directly under this ContentPresenter to inherit the correct templated parent</remarks>
+		internal bool SynchronizeContentWithOuterTemplatedParent { get; set; } = true;
+
+		/// <summary>
 		/// Determines if the current ContentPresenter is hosting a native control.
 		/// </summary>
 		/// <remarks>This is used to alter the propagation of the templated parent.</remarks>
@@ -697,7 +703,9 @@ namespace Windows.UI.Xaml.Controls
 				{
 					var templatedParent = _contentTemplateRoot is ImplicitTextBlock
 						? this // ImplicitTextBlock is a special case that requires its TemplatedParent to be the ContentPresenter
-						: (this.TemplatedParent as IFrameworkElement)?.TemplatedParent;
+						: !SynchronizeContentWithOuterTemplatedParent && _dataTemplateUsedLastUpdate == null
+							? this.TemplatedParent
+							: (this.TemplatedParent as IFrameworkElement)?.TemplatedParent;
 
 					binder.TemplatedParent = templatedParent;
 				}
